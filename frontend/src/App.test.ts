@@ -594,6 +594,32 @@ describe('refund desk', () => {
     expect(wrapper.text()).toContain('退款成功')
   })
 
+  it('refreshes an unknown refund without reconciling the provider', async () => {
+    const pendingOrder = { ...order, refund_id: 'refund-7', refund_status: 'UNKNOWN' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      const url = String(input)
+      if (url === '/api/orders') return jsonResponse([pendingOrder])
+      if (url === '/api/refunds/refund-7') return jsonResponse({
+        id: 'refund-7', order_id: 'A-1001', amount_cents: 19900, currency: 'CNY',
+        status: 'UNKNOWN', reason: '客户取消', message: 'Channel response was lost.',
+        provider_channel: 'mock-unknown', provider_request_id: 'provider-7',
+      })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+
+    const refresh = wrapper.get('[data-testid="refresh-status-A-1001"]')
+    expect(refresh.attributes('aria-label')).toBe('刷新订单 A-1001 的退款状态')
+    await refresh.trigger('click')
+    await flushPromises()
+
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/refunds/refund-7')).toBe(true)
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+    expect(wrapper.get('[data-testid="refund-status-A-1001"]').text()).toBe('结果待确认')
+    expect(wrapper.get('[data-testid="query-status-A-1001"]').text()).toBe('查询处理结果')
+  })
+
   it('recovers A-1002 from the single query action after an unknown submission', async () => {
     const pendingOrder = { ...order, id: 'A-1002', amount_cents: 8800, provider_channel: 'mock-unknown' }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {

@@ -261,6 +261,11 @@ async function queryRefund(order: Order) {
     await recoverRefund(order)
     return
   }
+  await refreshRefund(order)
+}
+
+async function refreshRefund(order: Order) {
+  if (!order.refund_id) return
   const requestedIdentity = identityKey.value
   const session = sessionVersion
   busyRefund.value = order.refund_id
@@ -458,6 +463,9 @@ onUnmounted(clearNotice)
                 <td class="actions-cell">
                   <a :data-testid="`action-details-${order.id}`" class="text-button" :href="orderPath(order.id)" @click="openOrderDetails(order.id, $event)">详情</a>
                   <template v-if="order.refund_id">
+                    <button v-if="order.refund_status === 'UNKNOWN'" :data-testid="`refresh-status-${order.id}`" class="text-button" type="button" :title="`刷新订单 ${order.id} 的退款状态`" :aria-label="`刷新订单 ${order.id} 的退款状态`" :disabled="busyRefund === order.refund_id" @click="refreshRefund(order)">
+                      <span aria-hidden="true">↻</span> 刷新
+                    </button>
                     <button :data-testid="`query-status-${order.id}`" :class="!identity.readOnly && (order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING') ? 'primary-button compact' : 'text-button'" type="button" :disabled="busyRefund === order.refund_id" @click="queryRefund(order)">
                       {{ order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING'
                         ? (identity.readOnly ? (busyRefund === order.refund_id ? '正在查询状态…' : '查询状态') : (busyRefund === order.refund_id ? '正在查询渠道结果…' : '查询处理结果'))
