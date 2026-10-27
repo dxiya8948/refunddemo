@@ -1,0 +1,10 @@
+backend/*.db
+backend/*.db-shm
+backend/*.db-wal
+backend/refunddesk-server*.exe
+backend/refunds.test.exe
+backend/.gotmp/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
