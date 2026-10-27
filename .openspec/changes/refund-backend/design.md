@@ -4,7 +4,7 @@
 
 Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主要风险是重试、并发或渠道响应丢失导致重复资金操作。因此，调用渠道前必须先持久化唯一的业务预占记录和渠道请求身份。本文描述现有实现，不构成生产支付接入授权。
 
-目标：商户隔离、每笔已支付订单最多一次全额退款、同键重放、不确定结果持久化，以及重启后仅查询原请求的恢复机制。非目标：部分退款、外部身份签发、真实支付网关、独立支付状态账本。
+目标：商户隔离、每笔已支付订单最多一次全额退款、同键重放、不确定结果持久化，以及重启后仅查询原请求的恢复机制。A-1002 增加初始支付未知和显式模拟同步闭环；这不是生产支付接口或真实支付账本。非目标：部分退款、外部身份签发、真实支付网关、独立支付状态账本。
 
 ## 模块与职责
 
@@ -28,7 +28,7 @@ Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主
 | `merchant_id` | `TEXT NOT NULL` | 所属商户 |
 | `amount_cents` | `INTEGER NOT NULL CHECK (> 0)` | 全额金额，最小货币单位 |
 | `currency` | `TEXT NOT NULL` | 币种 |
-| `status` | `TEXT NOT NULL` | 当前演示使用 `PAID` / `UNPAID`；前端支付状态由此推导 |
+| `status` | `TEXT NOT NULL` | `UNKNOWN` / `PAID` / `UNPAID`；A-1002 初始未知，演示同步后为已支付 |
 | `provider_channel` | `TEXT NOT NULL` | 原支付渠道 |
 
 索引 `idx_orders_merchant(merchant_id, id)` 支持商户范围查询。当前没有独立的用户或支付状态表。
@@ -66,7 +66,9 @@ Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主
 
 业务代码只通过 `Provider` 接口访问该表，不将模拟器账本直接当作业务退款表读取。
 
-`OpenDB` 开启外键、WAL 和五秒 busy timeout。每个服务进程只保留一条 SQLite 连接。并发时数据库约束而非预先查询负责最终裁决。升级旧数据库时，迁移保留原有退款，并补充原因字段及商户范围内的幂等键约束。`SeedDemoOrders` 仅对匹配原种子 ID、商户、金额和渠道的旧 USD 记录及关联退款更正币种为 CNY，不改变金额或退款身份；正常启动不删除退款历史。`reset-demo` 是单独的破坏性命令。
+`schema_migrations(name TEXT PRIMARY KEY)` 记录一次性演示数据迁移。旧库中匹配原始 A-1002 且尚无退款的 `PAID` 行只在首次升级时改为 `UNKNOWN`；已经发生退款的历史记录不回滚。之后服务重启或重复初始化不会反转已同步成功的支付状态。
+
+`OpenDB` 开启外键、WAL 和五秒 busy timeout。每个服务进程只保留一条 SQLite 连接。并发时数据库约束而非预先查询负责最终裁决。升级旧数据库时，迁移保留原有退款，并补充原因字段、商户范围内的幂等键约束及一次性 A-1002 未知支付基线迁移。`SeedDemoOrders` 以 `UNKNOWN` 新建 A-1002；重复运行采用 `INSERT OR IGNORE` 保留已同步的 `PAID`，不重置业务状态。仅匹配原种子 ID、商户、金额和渠道的旧 USD 记录及关联退款更正币种为 CNY，不改变金额或退款身份；正常启动不删除退款历史。`reset-demo` 是单独的破坏性命令。
 
 ## 创建退款流程
 
@@ -80,6 +82,8 @@ Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主
 跨外部渠道的资金操作无法与 SQLite 预占合并成同一事务。预占后、提交前崩溃可能留下 `PROCESSING`；渠道受理后、返回前崩溃可能留下 `PROCESSING` 或 `UNKNOWN`。两者均可通过原请求 ID 查询恢复；不能盲目再次提交。
 
 ## 状态流转与查证
+
+支付状态与退款状态是两个不同的生命周期。A-1002 的 `UNKNOWN` 指支付状态未知。商户写身份调用 `POST /api/orders/A-1002/sync-payment` 后，服务通过 `PaymentProvider.QueryPayment` 查询模拟支付渠道；仅渠道返回 `PAID` 才条件更新订单，若仍为 `UNKNOWN` 则保持不可退款。该端点限定原渠道为 `mock-unknown`，按商户隔离，只读用户拒绝，重复同步安全。退款仍必须在 `PAID` 后创建，且退款状态可独立经历 `PROCESSING → UNKNOWN → SUCCEEDED`。
 
 ```text
 PROCESSING -> SUCCEEDED | FAILED | UNKNOWN
@@ -97,7 +101,7 @@ SUCCEEDED、FAILED 为终态
 
 已定义的 `/api` 接口需要 `Authorization: Bearer <token>`，`/healthz` 不需要。令牌到商户/角色的映射由服务端配置。查询按商户过滤；无权访问的资源返回 `404`，只读写入返回 `403`。
 
-读取接口包括 `GET /api/orders`、`GET /api/orders/{orderID}`、`GET /api/orders/{orderID}/refunds` 和 `GET /api/refunds/{refundID}`。创建接口为 `POST /api/orders/{orderID}/refunds`，查证接口为 `POST /api/refunds/{refundID}/reconcile`。错误响应包含 `code` 与 `message`；无效请求为 `400`、冲突为 `409`、非预期存储或渠道配置错误为 `500`。
+读取接口包括 `GET /api/orders`、`GET /api/orders/{orderID}`、`GET /api/orders/{orderID}/refunds` 和 `GET /api/refunds/{refundID}`。支付同步接口为 `POST /api/orders/{orderID}/sync-payment`；创建接口为 `POST /api/orders/{orderID}/refunds`，查证接口为 `POST /api/refunds/{refundID}/reconcile`。错误响应包含 `code` 与 `message`；无效请求为 `400`、冲突为 `409`、非预期存储或渠道配置错误为 `500`。
 
 演示环境使用静态令牌，CORS 仅允许 `http://localhost:5173`。这不是生产身份认证或面向公网的 CORS 策略。生产部署需要受管理的身份体系、密钥管理、具备请求 ID 幂等能力的真实渠道适配器，以及对长期 `PROCESSING`/`UNKNOWN` 记录的告警。
 

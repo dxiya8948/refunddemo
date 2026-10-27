@@ -62,8 +62,10 @@ npm run build
 
 ## 演示场景
 
+注意：A-1002 初始支付状态改为 `UNKNOWN` 是本项目的新增演示要求，偏离公开验收清单中该订单初始已支付的种子数据。验证公开验收时需单独说明这一差异。
+
 - 点击订单号进入 `/orders/{orderID}` 详情页；可复制 URL、刷新或使用浏览器回退。详情页直接请求按商户隔离的订单接口；以商户 B 打开商户 A 的详情 URL 应返回 `404` 并显示无权访问，不显示 A 的订单数据。静态部署时需将前端路由回退到 `index.html`。
-- `A-1001` 退款立即成功；`A-1002` 首次返回 `UNKNOWN`，在退款弹窗、列表或订单详情点击“查询处理结果”会按原渠道请求号查证为 `SUCCEEDED`；列表中 `UNKNOWN` 行的“刷新”只读取已持久化的退款状态，不触发渠道查证。`A-1003` 被渠道明确拒绝；`A-1004` 未支付，不会调用渠道。普通“查询状态”只用于读取终态或只读身份，不会触发渠道查证。
+- `A-1002` 初始支付状态为 `UNKNOWN`，不可退款；在列表操作栏点“同步状态”后查询模拟渠道，确认支付成功才变为 `PAID` 并允许退款；若查询仍未知，则保持不可退款。该订单退款首次返回 `UNKNOWN`；退款弹窗、列表或订单详情中的“查询处理结果”按原渠道请求号查证为 `SUCCEEDED`，退款 `UNKNOWN` 行的“刷新”则只读取本地已保存状态。`A-1001` 退款立即成功；`A-1003` 被渠道明确拒绝；`A-1004` 未支付且不支持同步，不会调用退款渠道。普通“查询状态”只用于读取退款记录，不触发渠道查证。
 - 退款结果由初始化订单的原渠道决定，不由退款申请选择：`A-1001` 成功、`A-1002` 响应丢失后可查证、`A-1003` 明确失败。失败结果显示原因和不可重复发起的提示。
 - 商户 B 只能看到 `B-2001`。
 - 每笔订单最多创建一条退款。幂等键按商户隔离；同一键更换订单或原因返回 `409`。
@@ -83,13 +85,13 @@ npm run build
 | 正常全额退款，业务与渠道记录一致 | `TestSuccessfulRefundMatchesBusinessAndProviderLedgers`；前端提交测试见 `App.test.ts` |
 | 同键重放及订单/原因变更冲突 | `TestRefundIdempotencyAndPayloadConflict`、`TestRefundReasonIsRequiredAndPartOfIdempotencyPayload` |
 | 不同键的十个并发请求 | `TestTenConcurrentRefundRequestsHaveNoServerErrors`：验证一条业务退款、一条渠道受理记录、一次提交且无 500 |
-| 不确定结果及原请求查证 | `TestUnknownRefundRecoversByPersistedProviderRequest`；`App.test.ts` 覆盖 A-1002 从首次未知到列表/详情查证的完整交互 |
+| 支付未知同步及退款不确定结果查证 | `TestUnknownPaymentMustSyncBeforeRefund`、`TestUnknownRefundRecoversByPersistedProviderRequest`；`App.test.ts` 覆盖 A-1002 先同步支付、再退款和查证 |
 | 重启后恢复 | `TestUnknownRefundCanReconcileAfterDatabaseReopen`：重新创建数据库连接、处理器及渠道模拟器后查证 |
 | 明确失败及未支付拒绝 | `TestExplicitProviderFailureAndUnpaidOrderDoNotCreateAcceptance` |
 | 商户隔离与只读权限 | `TestMerchantIsolationAndReadonlyRole`、`TestOrderDetailAndReconcileContract` |
 | 加载、空列表、错误、处理中、身份切换 | `App.test.ts` 覆盖各状态及旧商户迟到响应 |
 | 可重复初始化且保留退款 | `TestContractSeedDataIsRepeatableAndPreservesRefunds` |
 
-如需手动验证重启恢复，又不触碰默认数据库：将 `DATABASE_PATH` 指向临时目录中的新文件，运行两次 `go run ./cmd/seed-demo`，再以 `ADDR=:8080` 启动 `go run ./cmd/server`。使用 `demo-a-write`，携带 `Idempotency-Key` 请求头，向 `/api/orders/A-1002/refunds` 提交 `{"reason":"customer_cancelled"}`；确认结果为 `UNKNOWN`。停服后使用同一 `DATABASE_PATH` 重启，再请求 `/api/refunds/{id}/reconcile`；确认结果为 `SUCCEEDED` 且 `provider_request_id` 不变。运行 `go run ./cmd/provider-stats`，确认 `A-1002` 仅有一条渠道受理记录和一次提交。前端身份选择器和状态操作也可复现此流程。
+手动演示 A-1002：初始化后确认 `GET /api/orders/A-1002` 为 `UNKNOWN`；退款请求应返回 `409 order_not_refundable`。用商户 A 写令牌调用 `POST /api/orders/A-1002/sync-payment` 后，订单变为 `PAID`；随后创建退款，首次结果为 `UNKNOWN`。停服并以相同数据库重启，调用 `/api/refunds/{id}/reconcile`；确认结果为 `SUCCEEDED` 且渠道请求号不变。支付同步不重复运行初始化回滚；普通启动和重复 `seed-demo` 保留已同步状态与退款历史。自动化测试使用临时数据库，不触碰默认数据库。
 
 架构与前端设计系统见 [DESIGN.md](DESIGN.md)，后端 SDD 规范见 [.openspec/specs/refund-backend/spec.md](.openspec/specs/refund-backend/spec.md)，技术设计见 [.openspec/changes/refund-backend/design.md](.openspec/changes/refund-backend/design.md)，开发辅助说明见 [AI_USAGE.md](AI_USAGE.md)。

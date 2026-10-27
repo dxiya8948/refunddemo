@@ -87,6 +87,7 @@ function apiErrorMessage(code: string | undefined, status: number) {
     case 'idempotency_conflict': return '该幂等键已用于其他退款请求。'
     case 'refund_exists': return '此订单已有退款记录，请查询原退款。'
     case 'order_not_refundable': return '只有已支付订单可以退款。'
+    case 'payment_not_syncable': return '当前订单的支付状态不支持同步。'
     case 'not_recoverable': return '当前退款状态无需查证。'
     case 'provider_unavailable': return '支付渠道暂不可用。'
     case 'not_found': return '订单不存在或无权访问。'
@@ -139,6 +140,26 @@ function applyRefund(refund: Refund) {
   update(orders.value.find((item) => item.id === refund.order_id) || null)
   update(detailOrder.value)
   if (refundDialogOrder.value?.id === refund.order_id) refundResult.value = refund
+}
+
+async function syncPayment(order: Order) {
+  if (identity.value.readOnly || order.status !== 'UNKNOWN' || order.provider_channel !== 'mock-unknown' || order.refund_id) return
+  const requestedIdentity = identityKey.value
+  const session = sessionVersion
+  busyOrder.value = order.id
+  errorMessage.value = ''
+  try {
+    const updated = await api<Order>(`/orders/${encodeURIComponent(order.id)}/sync-payment`, { method: 'POST' })
+    if (session !== sessionVersion || requestedIdentity !== identityKey.value || updated.merchant_id !== identity.value.merchant) return
+    const listed = orders.value.find((item) => item.id === updated.id)
+    if (listed) listed.status = updated.status
+    if (detailOrder.value?.id === updated.id) detailOrder.value.status = updated.status
+    showNotice(updated.status === 'PAID' ? `订单 ${order.id} 已确认支付成功。` : `订单 ${order.id} 的支付状态仍待确认。`)
+  } catch (error) {
+    if (session === sessionVersion && requestedIdentity === identityKey.value) errorMessage.value = error instanceof Error ? error.message : '支付状态同步失败。'
+  } finally {
+    if (session === sessionVersion && requestedIdentity === identityKey.value) busyOrder.value = ''
+  }
 }
 
 function openOrderDetails(orderId: string, event: MouseEvent) {
@@ -472,6 +493,9 @@ onUnmounted(clearNotice)
                         : (busyRefund === order.refund_id ? '正在查询状态…' : '查询状态') }}
                     </button>
                   </template>
+                  <button v-else-if="!identity.readOnly && order.status === 'UNKNOWN' && order.provider_channel === 'mock-unknown'" :data-testid="`sync-payment-${order.id}`" class="primary-button compact" type="button" :disabled="busyOrder === order.id" @click="syncPayment(order)">
+                    {{ busyOrder === order.id ? '正在同步…' : '同步状态' }}
+                  </button>
                   <button
                     v-else-if="!identity.readOnly"
                     :data-testid="`refund-${order.id}`"

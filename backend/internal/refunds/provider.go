@@ -84,3 +84,10 @@ func (p *DemoProvider) QueryRefund(ctx context.Context, requestID string) (Provi
 	}
 	return result, nil
 }
+
+func (p *DemoProvider) QueryPayment(_ context.Context, orderID string) (string, error) {
+	if p.Channel == "mock-unknown" && orderID == "A-1002" {
+		return "PAID", nil
+	}
+	return "UNKNOWN", nil
+}

@@ -79,6 +79,7 @@ td small { display: block; margin-top: 4px; color: #9aa3ab; font-size: 10px; }
 .channel-dot { display: inline-block; width: 6px; height: 6px; margin: 0 7px 1px 0; border-radius: 50%; background: #82939e; }
 .status-pill { display: inline-flex; align-items: center; min-height: 22px; padding: 0 8px; border-radius: 4px; background: #f0f2f4; color: #68737d; font-size: 10px; font-weight: 700; letter-spacing: .25px; }
 .status-pill.order-paid { background: #e8f0ff; color: #1d4ed8; }
+.status-pill.order-unknown { background: #fff1db; color: #9a650d; }
 .status-pill.order-unpaid, .status-pill.refund-none { background: #f0f2f4; color: #68737d; }
 .status-pill.payment-paid { background: #e6f6f1; color: #08745a; }
 .status-pill.payment-unpaid, .status-pill.payment-unknown { background: #fff1db; color: #9a650d; }

@@ -53,6 +53,15 @@ func (h *Handler) apiRoute(w http.ResponseWriter, r *http.Request) {
 		h.withAuth(func(w http.ResponseWriter, r *http.Request, p Principal) { h.getOrder(w, r, p, orderID) })(w, r)
 		return
 	}
+	if len(parts) == 4 && parts[1] == "orders" && parts[3] == "sync-payment" {
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w)
+			return
+		}
+		orderID := parts[2]
+		h.withAuth(func(w http.ResponseWriter, r *http.Request, p Principal) { h.syncPayment(w, r, p, orderID) })(w, r)
+		return
+	}
 	if len(parts) == 4 && parts[1] == "orders" && parts[3] == "refunds" {
 		orderID := parts[2]
 		switch r.Method {
@@ -137,6 +146,53 @@ func (h *Handler) listOrders(w http.ResponseWriter, r *http.Request, principal P
 		return
 	}
 	writeJSON(w, http.StatusOK, orders)
+}
+
+func (h *Handler) syncPayment(w http.ResponseWriter, r *http.Request, principal Principal, orderID string) {
+	if principal.Role != RoleMerchant {
+		writeError(w, http.StatusForbidden, "forbidden", "this account is read only")
+		return
+	}
+	order, err := h.loadOrder(r.Context(), orderID, principal.MerchantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "order not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "could not load order")
+		return
+	}
+	if order.ProviderChannel != "mock-unknown" {
+		writeError(w, http.StatusConflict, "payment_not_syncable", "payment status cannot be synchronized for this order")
+		return
+	}
+	if order.Status != "PAID" {
+		if order.Status != "UNKNOWN" {
+			writeError(w, http.StatusConflict, "payment_not_syncable", "payment status cannot be synchronized for this order")
+			return
+		}
+		provider, ok := h.providers[order.ProviderChannel].(PaymentProvider)
+		if !ok {
+			writeError(w, http.StatusInternalServerError, "provider_unavailable", "payment status provider is unavailable")
+			return
+		}
+		status, err := provider.QueryPayment(r.Context(), order.ID)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "provider_unavailable", "could not query payment status")
+			return
+		}
+		if status == "PAID" {
+			// The conditional update keeps concurrent synchronization idempotent.
+			if _, err := h.db.ExecContext(r.Context(), `UPDATE orders SET status = 'PAID' WHERE id = ? AND merchant_id = ? AND status = 'UNKNOWN' AND provider_channel = 'mock-unknown'`, orderID, principal.MerchantID); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", "could not synchronize payment")
+				return
+			}
+		} else if status != "UNKNOWN" {
+			writeError(w, http.StatusBadGateway, "provider_unavailable", "payment provider returned an invalid status")
+			return
+		}
+	}
+	h.getOrder(w, r, principal, orderID)
 }
 
 func (h *Handler) createRefund(w http.ResponseWriter, r *http.Request, principal Principal, orderID string) {

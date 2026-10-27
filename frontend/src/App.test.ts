@@ -25,6 +25,44 @@ beforeEach(() => { window.history.replaceState({}, '', '/'); document.cookie = '
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); document.cookie = 'refunddesk_identity=; Max-Age=0; Path=/'; window.history.replaceState({}, '', '/') })
 
 describe('refund desk', () => {
+  it('syncs A-1002 unknown payment before allowing its refund', async () => {
+    const pendingOrder = { ...order, id: 'A-1002', status: 'UNKNOWN', provider_channel: 'mock-unknown' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input) === '/api/orders') return jsonResponse([pendingOrder])
+      if (String(input) === '/api/orders/A-1002/sync-payment' && init?.method === 'POST') {
+        return jsonResponse({ ...pendingOrder, status: 'PAID' })
+      }
+      throw new Error(`Unexpected request: ${String(input)}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="payment-status-A-1002"]').text()).toBe('未知')
+    expect(wrapper.find('[data-testid="refund-A-1002"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="sync-payment-A-1002"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="payment-status-A-1002"]').text()).toBe('已支付')
+    expect(wrapper.find('[data-testid="sync-payment-A-1002"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="refund-A-1002"]').attributes('disabled')).toBeUndefined()
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/orders/A-1002/sync-payment' && init?.method === 'POST')).toBe(true)
+  })
+
+  it('keeps A-1002 unrefundable when payment sync is still unknown', async () => {
+    const pendingOrder = { ...order, id: 'A-1002', status: 'UNKNOWN', provider_channel: 'mock-unknown' }
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input) === '/api/orders') return jsonResponse([pendingOrder])
+      if (String(input) === '/api/orders/A-1002/sync-payment' && init?.method === 'POST') return jsonResponse(pendingOrder)
+      throw new Error(`Unexpected request: ${String(input)}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.get('[data-testid="sync-payment-A-1002"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="payment-status-A-1002"]').text()).toBe('未知')
+    expect(wrapper.get('[data-testid="sync-payment-A-1002"]').text()).toBe('同步状态')
+    expect(wrapper.find('[data-testid="refund-A-1002"]').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').text()).toContain('支付状态仍待确认')
+  })
+
   it('marks the current user only while choosing a replacement identity', async () => {
     document.cookie = 'refunddesk_identity=; Max-Age=0; Path=/'
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(() => jsonResponse([order]))

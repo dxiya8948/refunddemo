@@ -17,10 +17,22 @@ type fakeProvider struct {
 	mu             sync.Mutex
 	refundCalls    int
 	queryCalls     int
+	paymentCalls   int
 	lastRequestID  string
 	lastQueryID    string
 	refundResponse ProviderResult
 	queryResponse  ProviderResult
+	paymentStatus  string
+}
+
+func (p *fakeProvider) QueryPayment(_ context.Context, orderID string) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.paymentCalls++
+	if orderID != "A-1002" {
+		return "UNKNOWN", nil
+	}
+	return p.paymentStatus, nil
 }
 
 func (p *fakeProvider) SubmitRefund(_ context.Context, request ProviderRequest) (ProviderResult, error) {
@@ -229,8 +241,10 @@ func TestUnknownRefundRecoversByPersistedProviderRequest(t *testing.T) {
 	provider := &fakeProvider{
 		refundResponse: ProviderResult{Status: StatusUnknown, RequestID: "provider-unknown-7"},
 		queryResponse:  ProviderResult{Status: StatusSucceeded, RequestID: "provider-unknown-7"},
+		paymentStatus:  "PAID",
 	}
 	_, handler := testHandler(t, provider)
+	request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
 	created := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "idem-unknown", "reason": "customer_cancelled"})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", created.Code, created.Body.String())
@@ -253,6 +267,134 @@ func TestUnknownRefundRecoversByPersistedProviderRequest(t *testing.T) {
 	submittedID, queriedID := provider.requestIDs()
 	if submittedID == "" || queriedID != result.ProviderRequestID || submittedID != result.ProviderRequestID {
 		t.Fatalf("reconciliation must query the exact reserved provider request id: submitted=%q queried=%q refund=%q", submittedID, queriedID, result.ProviderRequestID)
+	}
+}
+
+func TestUnknownPaymentMustSyncBeforeRefund(t *testing.T) {
+	provider := &fakeProvider{refundResponse: ProviderResult{Status: StatusUnknown, RequestID: "refund-request"}, paymentStatus: "PAID"}
+	db, handler := testHandler(t, provider)
+	before := request(handler, http.MethodGet, "/api/orders/A-1002", "token-a", nil)
+	if before.Code != http.StatusOK || !bytes.Contains(before.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) {
+		t.Fatalf("initial payment must be unknown: %d %s", before.Code, before.Body.String())
+	}
+	blocked := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "before-sync", "reason": "customer_cancelled"})
+	if blocked.Code != http.StatusConflict {
+		t.Fatalf("unknown payment must not be refundable: %d %s", blocked.Code, blocked.Body.String())
+	}
+	if calls, _ := provider.calls(); calls != 0 {
+		t.Fatalf("refund provider was called before payment sync: %d", calls)
+	}
+	for _, token := range []string{"", "token-b", "token-a-readonly"} {
+		result := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", token, nil)
+		if result.Code != map[string]int{"": 401, "token-b": 404, "token-a-readonly": 403}[token] {
+			t.Fatalf("unexpected sync access for %q: %d %s", token, result.Code, result.Body.String())
+		}
+	}
+	updated := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
+	if updated.Code != http.StatusOK || !bytes.Contains(updated.Body.Bytes(), []byte(`"status":"PAID"`)) {
+		t.Fatalf("sync must confirm paid: %d %s", updated.Code, updated.Body.String())
+	}
+	if provider.paymentCalls != 1 {
+		t.Fatalf("payment sync must query provider once, got %d", provider.paymentCalls)
+	}
+	if retry := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil); retry.Code != http.StatusOK {
+		t.Fatalf("sync must be idempotent: %d %s", retry.Code, retry.Body.String())
+	}
+	if provider.paymentCalls != 1 {
+		t.Fatalf("confirmed payment should not query provider again, got %d calls", provider.paymentCalls)
+	}
+	if other := request(handler, http.MethodPost, "/api/orders/A-1001/sync-payment", "token-a", nil); other.Code != http.StatusConflict {
+		t.Fatalf("other channels cannot be marked paid by demo sync: %d %s", other.Code, other.Body.String())
+	}
+	created := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "after-sync", "reason": "customer_cancelled"})
+	if created.Code != http.StatusCreated || !bytes.Contains(created.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) {
+		t.Fatalf("refund should now enter its independent unknown state: %d %s", created.Code, created.Body.String())
+	}
+	if err := SeedDemoOrders(db); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM orders WHERE id = 'A-1002'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "PAID" {
+		t.Fatalf("repeat initialization must not undo payment sync, got %s", status)
+	}
+}
+
+func TestUnknownPaymentProviderStillUnknownCannotUnlockRefund(t *testing.T) {
+	provider := &fakeProvider{paymentStatus: "UNKNOWN"}
+	_, handler := testHandler(t, provider)
+	result := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
+	if result.Code != http.StatusOK || !bytes.Contains(result.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) {
+		t.Fatalf("unconfirmed payment must remain unknown: %d %s", result.Code, result.Body.String())
+	}
+	blocked := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "still-unknown", "reason": "customer_cancelled"})
+	if blocked.Code != http.StatusConflict {
+		t.Fatalf("unconfirmed payment became refundable: %d %s", blocked.Code, blocked.Body.String())
+	}
+}
+
+func TestExistingDemoPaymentMigratesOnceWithoutUndoingSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-payment.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDemoOrders(db); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE orders SET status = 'PAID' WHERE id = 'A-1002'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE name = 'a1002_unknown_payment'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := db.QueryRow(`SELECT status FROM orders WHERE id = 'A-1002'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "UNKNOWN" {
+		t.Fatalf("legacy demo payment must become unknown once, got %s", status)
+	}
+	if _, err := db.Exec(`UPDATE orders SET status = 'PAID' WHERE id = 'A-1002'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := SeedDemoOrders(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM orders WHERE id = 'A-1002'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "PAID" {
+		t.Fatalf("restart must retain synced payment, got %s", status)
+	}
+	if err := ResetDemoData(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := SeedDemoOrders(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT status FROM orders WHERE id = 'A-1002'`).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "UNKNOWN" {
+		t.Fatalf("explicit reset must restore unknown payment, got %s", status)
 	}
 }
 
@@ -315,6 +457,7 @@ func TestUnknownRefundCanReconcileAfterDatabaseReopen(t *testing.T) {
 	provider := NewDemoProvider(db, "mock-unknown")
 	tokens := map[string]Principal{"token-a": {MerchantID: "merchant-a", Role: RoleMerchant}}
 	firstHandler := NewHandler(db, map[string]Provider{"mock-unknown": provider}, tokens)
+	request(firstHandler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
 	created := request(firstHandler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "restart-key", "reason": "customer_cancelled"})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("expected create 201, got %d: %s", created.Code, created.Body.String())
@@ -564,7 +707,7 @@ func TestContractSeedDataIsRepeatableAndPreservesRefunds(t *testing.T) {
 		status   string
 	}{
 		"A-1001": {"merchant-a", 19900, "PAID"},
-		"A-1002": {"merchant-a", 8800, "PAID"},
+		"A-1002": {"merchant-a", 8800, "UNKNOWN"},
 		"A-1003": {"merchant-a", 5600, "PAID"},
 		"A-1004": {"merchant-a", 12900, "UNPAID"},
 		"B-2001": {"merchant-b", 25600, "PAID"},
@@ -701,8 +844,9 @@ func TestOrderDetailAndReconcileContract(t *testing.T) {
 }
 
 func TestOrdersExposePersistedRefundUpdateTime(t *testing.T) {
-	provider := &fakeProvider{refundResponse: ProviderResult{Status: StatusUnknown, RequestID: "provider-time"}}
+	provider := &fakeProvider{refundResponse: ProviderResult{Status: StatusUnknown, RequestID: "provider-time"}, paymentStatus: "PAID"}
 	_, handler := testHandler(t, provider)
+	request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
 	created := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "time-key", "reason": "customer_cancelled"})
 	if created.Code != http.StatusCreated {
 		t.Fatalf("create refund: %d %s", created.Code, created.Body.String())

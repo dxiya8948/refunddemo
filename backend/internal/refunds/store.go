@@ -69,11 +69,39 @@ CREATE TABLE IF NOT EXISTS provider_records (
 	if err := migrateRefundIdempotency(db); err != nil {
 		return fmt.Errorf("migrate refund records: %w", err)
 	}
+	if err := migrateDemoUnknownPayment(db); err != nil {
+		return fmt.Errorf("migrate demo payment state: %w", err)
+	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_orders_merchant ON orders(merchant_id, id);
 CREATE INDEX IF NOT EXISTS idx_refunds_merchant ON refunds(merchant_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create database indexes: %w", err)
 	}
 	return nil
+}
+
+// Existing demo databases need this correction once, without undoing a later sync.
+func migrateDemoUnknownPayment(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)`); err != nil {
+		return err
+	}
+	var applied int
+	if err = tx.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE name = 'a1002_unknown_payment'`).Scan(&applied); err != nil {
+		return err
+	}
+	if applied == 0 {
+		if _, err = tx.Exec(`UPDATE orders SET status = 'UNKNOWN' WHERE id = 'A-1002' AND merchant_id = 'merchant-a' AND amount_cents = 8800 AND provider_channel = 'mock-unknown' AND status = 'PAID' AND NOT EXISTS (SELECT 1 FROM refunds WHERE order_id = 'A-1002')`); err != nil {
+			return err
+		}
+		if _, err = tx.Exec(`INSERT INTO schema_migrations (name) VALUES ('a1002_unknown_payment')`); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func migrateRefundIdempotency(db *sql.DB) error {
@@ -200,7 +228,7 @@ SELECT id, order_id, merchant_id, amount_cents, currency, status, idempotency_ke
 func SeedDemoOrders(db *sql.DB) error {
 	orders := []Order{
 		{ID: "A-1001", MerchantID: "merchant-a", AmountCents: 19900, Currency: "CNY", Status: "PAID", ProviderChannel: "mock-success"},
-		{ID: "A-1002", MerchantID: "merchant-a", AmountCents: 8800, Currency: "CNY", Status: "PAID", ProviderChannel: "mock-unknown"},
+		{ID: "A-1002", MerchantID: "merchant-a", AmountCents: 8800, Currency: "CNY", Status: "UNKNOWN", ProviderChannel: "mock-unknown"},
 		{ID: "A-1003", MerchantID: "merchant-a", AmountCents: 5600, Currency: "CNY", Status: "PAID", ProviderChannel: "mock-fail"},
 		{ID: "A-1004", MerchantID: "merchant-a", AmountCents: 12900, Currency: "CNY", Status: "UNPAID", ProviderChannel: "mock-success"},
 		{ID: "B-2001", MerchantID: "merchant-b", AmountCents: 25600, Currency: "CNY", Status: "PAID", ProviderChannel: "mock-success"},

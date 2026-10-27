@@ -72,3 +72,7 @@ type Provider interface {
 	SubmitRefund(context.Context, ProviderRequest) (ProviderResult, error)
 	QueryRefund(context.Context, string) (ProviderResult, error)
 }
+
+type PaymentProvider interface {
+	QueryPayment(context.Context, string) (string, error)
+}
