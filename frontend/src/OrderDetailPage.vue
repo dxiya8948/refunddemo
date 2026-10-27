@@ -2,8 +2,8 @@
 import type { Order } from './order'
 import { formatMoney, orderStatusLabel, paymentStatus, refundMessage, refundStatusLabel } from './order'
 
-defineProps<{ orderId: string; order: Order | null; loading: boolean; error: string }>()
-defineEmits<{ back: [] }>()
+defineProps<{ orderId: string; order: Order | null; loading: boolean; error: string; actionError: string; canReconcile: boolean; reconciling: boolean }>()
+defineEmits<{ back: []; reconcile: [order: Order] }>()
 </script>
 
 <template>
@@ -38,6 +38,12 @@ defineEmits<{ back: [] }>()
           <div class="detail-wide"><dt>退款原因</dt><dd>{{ order.refund_reason || '—' }}</dd></div>
           <div v-if="order.refund_message" class="detail-wide"><dt>处理结果</dt><dd>{{ refundMessage(order.refund_status, order.refund_message) }}</dd></div>
         </dl>
+        <div v-if="canReconcile && (order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING')" class="detail-refund-actions">
+          <button :data-testid="`detail-reconcile-${order.id}`" class="primary-button compact" type="button" :disabled="reconciling" @click="$emit('reconcile', order)">
+            {{ reconciling ? '正在查询渠道结果…' : '查询处理结果' }}
+          </button>
+        </div>
+        <p v-if="actionError" class="alert error detail-action-error" role="alert">{{ actionError }}</p>
       </div>
     </div>
   </section>

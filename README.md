@@ -63,7 +63,7 @@ npm run build
 ## 演示场景
 
 - 点击订单号进入 `/orders/{orderID}` 详情页；可复制 URL、刷新或使用浏览器回退。详情页直接请求按商户隔离的订单接口；以商户 B 打开商户 A 的详情 URL 应返回 `404` 并显示无权访问，不显示 A 的订单数据。静态部署时需将前端路由回退到 `index.html`。
-- `A-1001` 退款立即成功；`A-1002` 首次返回 `UNKNOWN`，查证后成功；`A-1003` 被渠道明确拒绝；`A-1004` 未支付，不会调用渠道。
+- `A-1001` 退款立即成功；`A-1002` 首次返回 `UNKNOWN`，在退款弹窗、列表或订单详情点击“查询处理结果”会按原渠道请求号查证为 `SUCCEEDED`；`A-1003` 被渠道明确拒绝；`A-1004` 未支付，不会调用渠道。普通“查询状态”只用于读取终态或只读身份，不会触发渠道查证。
 - 退款结果由初始化订单的原渠道决定，不由退款申请选择：`A-1001` 成功、`A-1002` 响应丢失后可查证、`A-1003` 明确失败。失败结果显示原因和不可重复发起的提示。
 - 商户 B 只能看到 `B-2001`。
 - 每笔订单最多创建一条退款。幂等键按商户隔离；同一键更换订单或原因返回 `409`。
@@ -83,7 +83,7 @@ npm run build
 | 正常全额退款，业务与渠道记录一致 | `TestSuccessfulRefundMatchesBusinessAndProviderLedgers`；前端提交测试见 `App.test.ts` |
 | 同键重放及订单/原因变更冲突 | `TestRefundIdempotencyAndPayloadConflict`、`TestRefundReasonIsRequiredAndPartOfIdempotencyPayload` |
 | 不同键的十个并发请求 | `TestTenConcurrentRefundRequestsHaveNoServerErrors`：验证一条业务退款、一条渠道受理记录、一次提交且无 500 |
-| 不确定结果及原请求查证 | `TestUnknownRefundRecoversByPersistedProviderRequest`；前端查证测试见 `App.test.ts` |
+| 不确定结果及原请求查证 | `TestUnknownRefundRecoversByPersistedProviderRequest`；`App.test.ts` 覆盖 A-1002 从首次未知到列表/详情查证的完整交互 |
 | 重启后恢复 | `TestUnknownRefundCanReconcileAfterDatabaseReopen`：重新创建数据库连接、处理器及渠道模拟器后查证 |
 | 明确失败及未支付拒绝 | `TestExplicitProviderFailureAndUnpaidOrderDoNotCreateAcceptance` |
 | 商户隔离与只读权限 | `TestMerchantIsolationAndReadonlyRole`、`TestOrderDetailAndReconcileContract` |

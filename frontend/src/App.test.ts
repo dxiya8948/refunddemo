@@ -125,10 +125,10 @@ describe('refund desk', () => {
 
   it('shows a top toast for two seconds without shifting the order list', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
-      if (String(input) === '/api/orders') return jsonResponse([{ ...order, refund_id: 'refund-7', refund_status: 'UNKNOWN' }])
+      if (String(input) === '/api/orders') return jsonResponse([{ ...order, refund_id: 'refund-7', refund_status: 'SUCCEEDED' }])
       if (String(input) === '/api/refunds/refund-7') return jsonResponse({
         id: 'refund-7', order_id: order.id, amount_cents: order.amount_cents,
-        currency: order.currency, status: 'UNKNOWN', reason: '客户取消', message: 'Still pending',
+        currency: order.currency, status: 'SUCCEEDED', reason: '客户取消', message: 'Refund completed successfully.',
       })
       throw new Error(`Unexpected request: ${String(input)}`)
     })
@@ -515,8 +515,8 @@ describe('refund desk', () => {
     })
     const wrapper = mount(App)
     await flushPromises()
-    await wrapper.get('[data-testid="reconcile-A-1001"]').trigger('click')
-    expect(wrapper.text()).toContain('正在查证渠道结果')
+    await wrapper.get('[data-testid="query-status-A-1001"]').trigger('click')
+    expect(wrapper.text()).toContain('正在查询渠道结果')
     finish(new Response(JSON.stringify({ id: 'refund-7', order_id: 'A-1001', status: 'UNKNOWN', message: 'Still pending' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     await flushPromises()
     expect(wrapper.text()).toContain('渠道结果尚未确认')
@@ -587,11 +587,106 @@ describe('refund desk', () => {
     })
     const wrapper = mount(App)
     await flushPromises()
-    await wrapper.get('[data-testid="reconcile-A-1001"]').trigger('click')
+    await wrapper.get('[data-testid="query-status-A-1001"]').trigger('click')
     await flushPromises()
 
     expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith('/refunds/refund-7/reconcile') && init?.method === 'POST')).toBe(true)
     expect(wrapper.text()).toContain('退款成功')
+  })
+
+  it('recovers A-1002 from the single query action after an unknown submission', async () => {
+    const pendingOrder = { ...order, id: 'A-1002', amount_cents: 8800, provider_channel: 'mock-unknown' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input)
+      if (url === '/api/orders') return jsonResponse([pendingOrder])
+      if (url === '/api/orders/A-1002/refunds' && init?.method === 'POST') return jsonResponse({
+        id: 'refund-2', order_id: 'A-1002', amount_cents: 8800, currency: 'CNY',
+        status: 'UNKNOWN', reason: '客户取消', message: 'Channel response was lost.',
+        provider_channel: 'mock-unknown', provider_request_id: 'stable-2',
+      }, 201)
+      if (url === '/api/refunds/refund-2/reconcile' && init?.method === 'POST') return jsonResponse({
+        id: 'refund-2', order_id: 'A-1002', amount_cents: 8800, currency: 'CNY',
+        status: 'SUCCEEDED', reason: '客户取消', message: 'Refund completed successfully.',
+        provider_channel: 'mock-unknown', provider_request_id: 'stable-2',
+      })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.get('[data-testid="refund-A-1002"]').trigger('click')
+    await wrapper.get('[aria-label="订单 A-1002 的退款原因"]').setValue('客户取消')
+    await wrapper.get('[data-testid="refund-continue"]').trigger('click')
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="refund-confirm"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('[data-testid="refund-status-A-1002"]').text()).toBe('结果待确认')
+    await wrapper.get('[data-testid="refund-dialog"] button').trigger('click')
+    const query = wrapper.get('[data-testid="query-status-A-1002"]')
+    expect(query.text()).toBe('查询处理结果')
+    expect(query.classes()).toContain('primary-button')
+    expect(wrapper.find('[data-testid="reconcile-A-1002"]').exists()).toBe(false)
+    await query.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="refund-status-A-1002"]').text()).toBe('退款成功')
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/refunds/refund-2')).toBe(false)
+  })
+
+  it('recovers an unknown A-1002 directly inside the refund dialog', async () => {
+    const pendingOrder = { ...order, id: 'A-1002', amount_cents: 8800, provider_channel: 'mock-unknown' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      const url = String(input)
+      if (url === '/api/orders') return jsonResponse([pendingOrder])
+      if (url === '/api/orders/A-1002/refunds' && init?.method === 'POST') return jsonResponse({
+        id: 'refund-2', order_id: 'A-1002', amount_cents: 8800, currency: 'CNY',
+        status: 'UNKNOWN', reason: '客户取消', message: 'Channel response was lost.',
+        provider_channel: 'mock-unknown', provider_request_id: 'stable-2',
+      }, 201)
+      if (url === '/api/refunds/refund-2/reconcile' && init?.method === 'POST') return jsonResponse({
+        id: 'refund-2', order_id: 'A-1002', amount_cents: 8800, currency: 'CNY',
+        status: 'SUCCEEDED', reason: '客户取消', message: 'Refund completed successfully.',
+        provider_channel: 'mock-unknown', provider_request_id: 'stable-2',
+      })
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.get('[data-testid="refund-A-1002"]').trigger('click')
+    await wrapper.get('[aria-label="订单 A-1002 的退款原因"]').setValue('客户取消')
+    await wrapper.get('[data-testid="refund-continue"]').trigger('click')
+    vi.useFakeTimers()
+    await wrapper.get('[data-testid="refund-confirm"]').trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.get('[data-testid="refund-chain"]').text()).toContain('结果待确认')
+    await wrapper.get('[data-testid="refund-dialog"]').get('button:not(.dialog-close)').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="refund-success"]').text()).toContain('退款已成功完成')
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
+  })
+
+  it('offers original-request recovery on an unknown order detail page', async () => {
+    window.history.replaceState({}, '', '/orders/A-1002')
+    const pendingOrder = { ...order, id: 'A-1002', amount_cents: 8800, provider_channel: 'mock-unknown',
+      refund_id: 'refund-2', refund_status: 'UNKNOWN' as const, provider_request_id: 'stable-2' }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
+      if (String(input) === '/api/orders/A-1002') return jsonResponse(pendingOrder)
+      if (String(input) === '/api/refunds/refund-2/reconcile' && init?.method === 'POST') return jsonResponse({
+        id: 'refund-2', order_id: 'A-1002', amount_cents: 8800, currency: 'CNY',
+        status: 'SUCCEEDED', reason: '客户取消', message: 'Refund completed successfully.',
+        provider_channel: 'mock-unknown', provider_request_id: 'stable-2',
+      })
+      throw new Error(`Unexpected request: ${String(input)}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+    await wrapper.get('[data-testid="detail-reconcile-A-1002"]').trigger('click')
+    await flushPromises()
+    const page = wrapper.get('[data-testid="order-detail-page"]')
+    expect(page.text()).toContain('退款成功')
+    expect(page.text()).toContain('stable-2')
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/refunds/refund-2/reconcile' && init?.method === 'POST')).toBe(true)
   })
 
   it('does not let a stale merchant response replace the current identity data', async () => {

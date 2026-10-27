@@ -125,6 +125,8 @@ td small { display: block; margin-top: 4px; color: #9aa3ab; font-size: 10px; }
 .detail-page-card { overflow: hidden; border: 1px solid #e2e7ec; border-radius: 7px; background: #fff; box-shadow: 0 2px 8px #25364708; }
 .detail-page-card .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .detail-page-card .detail-refund h2 { margin: 0; padding: 20px 24px 0; color: #25323d; font-size: 14px; font-weight: 600; }
+.detail-refund-actions { padding: 0 24px 24px; }
+.detail-action-error { margin: 0 24px 24px; }
 .detail-page-error { padding: 24px; }
 .detail-page-error h2 { margin: 0 0 10px; font-size: 17px; }
 .detail-page-error p { margin: 0 0 8px; font-size: 12px; line-height: 1.5; }

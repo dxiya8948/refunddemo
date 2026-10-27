@@ -134,6 +134,7 @@ function applyRefund(refund: Refund) {
     order.refund_reason = refund.reason
     order.refund_message = refund.message
     order.refund_updated_at = refund.updated_at
+    if (refund.provider_request_id) order.provider_request_id = refund.provider_request_id
   }
   update(orders.value.find((item) => item.id === refund.order_id) || null)
   update(detailOrder.value)
@@ -256,6 +257,10 @@ async function refundOrder() {
 
 async function queryRefund(order: Order) {
   if (!order.refund_id) return
+  if (!identity.value.readOnly && (order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING')) {
+    await recoverRefund(order)
+    return
+  }
   const requestedIdentity = identityKey.value
   const session = sessionVersion
   busyRefund.value = order.refund_id
@@ -380,7 +385,7 @@ onUnmounted(clearNotice)
     </main>
 
     <main v-else-if="route.kind === 'order'" class="detail-main">
-      <OrderDetailPage :order-id="route.orderId" :order="detailOrder" :loading="detailLoading" :error="detailError" @back="navigate('/')" />
+      <OrderDetailPage :order-id="route.orderId" :order="detailOrder" :loading="detailLoading" :error="detailError" :action-error="errorMessage" :can-reconcile="!identity.readOnly" :reconciling="!!detailOrder?.refund_id && busyRefund === detailOrder.refund_id" @back="navigate('/')" @reconcile="recoverRefund" />
     </main>
 
     <main v-else-if="route.kind === 'not-found'" class="detail-main">
@@ -453,18 +458,10 @@ onUnmounted(clearNotice)
                 <td class="actions-cell">
                   <a :data-testid="`action-details-${order.id}`" class="text-button" :href="orderPath(order.id)" @click="openOrderDetails(order.id, $event)">详情</a>
                   <template v-if="order.refund_id">
-                    <button :data-testid="`query-status-${order.id}`" class="text-button" type="button" :disabled="busyRefund === order.refund_id" @click="queryRefund(order)">
-                      {{ busyRefund === order.refund_id ? '正在查询状态…' : '查询状态' }}
-                    </button>
-                    <button
-                      v-if="order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING'"
-                      :data-testid="`reconcile-${order.id}`"
-                      class="primary-button compact"
-                      type="button"
-                      :disabled="busyRefund === order.refund_id || identity.readOnly"
-                      @click="recoverRefund(order)"
-                    >
-                      {{ busyRefund === order.refund_id ? '正在查证渠道结果…' : '查证结果' }}
+                    <button :data-testid="`query-status-${order.id}`" :class="!identity.readOnly && (order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING') ? 'primary-button compact' : 'text-button'" type="button" :disabled="busyRefund === order.refund_id" @click="queryRefund(order)">
+                      {{ order.refund_status === 'UNKNOWN' || order.refund_status === 'PROCESSING'
+                        ? (identity.readOnly ? (busyRefund === order.refund_id ? '正在查询状态…' : '查询状态') : (busyRefund === order.refund_id ? '正在查询渠道结果…' : '查询处理结果'))
+                        : (busyRefund === order.refund_id ? '正在查询状态…' : '查询状态') }}
                     </button>
                   </template>
                   <button
@@ -555,7 +552,7 @@ onUnmounted(clearNotice)
             <p v-else-if="refundResult" class="refund-result-text">{{ refundMessage(refundResult.status, refundResult.message) }}</p>
             <div class="dialog-actions">
               <button v-if="refundDialogOrder.refund_id && (refundResult?.status === 'UNKNOWN' || refundResult?.status === 'PROCESSING')" class="secondary-button" type="button" :disabled="busyRefund === refundDialogOrder.refund_id" @click="recoverRefund(refundDialogOrder)">
-                {{ busyRefund === refundDialogOrder.refund_id ? '正在查询渠道…' : '查询原退款结果' }}
+                {{ busyRefund === refundDialogOrder.refund_id ? '正在查询渠道结果…' : '查询处理结果' }}
               </button>
               <button class="primary-button" type="button" @click="closeRefundDialog()">关闭</button>
             </div>
