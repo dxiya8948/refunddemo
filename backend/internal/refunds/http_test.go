@@ -274,7 +274,7 @@ func TestUnknownPaymentMustSyncBeforeRefund(t *testing.T) {
 	provider := &fakeProvider{refundResponse: ProviderResult{Status: StatusUnknown, RequestID: "refund-request"}, paymentStatus: "PAID"}
 	db, handler := testHandler(t, provider)
 	before := request(handler, http.MethodGet, "/api/orders/A-1002", "token-a", nil)
-	if before.Code != http.StatusOK || !bytes.Contains(before.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) {
+	if before.Code != http.StatusOK || !bytes.Contains(before.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) || !bytes.Contains(before.Body.Bytes(), []byte(`"payment_channel_status":"UNKNOWN"`)) {
 		t.Fatalf("initial payment must be unknown: %d %s", before.Code, before.Body.String())
 	}
 	blocked := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "before-sync", "reason": "customer_cancelled"})
@@ -291,11 +291,19 @@ func TestUnknownPaymentMustSyncBeforeRefund(t *testing.T) {
 		}
 	}
 	updated := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
-	if updated.Code != http.StatusOK || !bytes.Contains(updated.Body.Bytes(), []byte(`"status":"PAID"`)) {
+	if updated.Code != http.StatusOK || !bytes.Contains(updated.Body.Bytes(), []byte(`"status":"PAID"`)) || !bytes.Contains(updated.Body.Bytes(), []byte(`"payment_channel_status":"SUCCEEDED"`)) {
 		t.Fatalf("sync must confirm paid: %d %s", updated.Code, updated.Body.String())
+	}
+	list := request(handler, http.MethodGet, "/api/orders", "token-a", nil)
+	if !bytes.Contains(list.Body.Bytes(), []byte(`"payment_channel_status":"SUCCEEDED"`)) {
+		t.Fatalf("list must expose synced channel status: %s", list.Body.String())
 	}
 	if provider.paymentCalls != 1 {
 		t.Fatalf("payment sync must query provider once, got %d", provider.paymentCalls)
+	}
+	var savedChannelStatus string
+	if err := db.QueryRow(`SELECT payment_channel_status FROM orders WHERE id = 'A-1002'`).Scan(&savedChannelStatus); err != nil || savedChannelStatus != "SUCCEEDED" {
+		t.Fatalf("channel status must persist as succeeded, got %q: %v", savedChannelStatus, err)
 	}
 	if retry := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil); retry.Code != http.StatusOK {
 		t.Fatalf("sync must be idempotent: %d %s", retry.Code, retry.Body.String())
@@ -326,7 +334,7 @@ func TestUnknownPaymentProviderStillUnknownCannotUnlockRefund(t *testing.T) {
 	provider := &fakeProvider{paymentStatus: "UNKNOWN"}
 	_, handler := testHandler(t, provider)
 	result := request(handler, http.MethodPost, "/api/orders/A-1002/sync-payment", "token-a", nil)
-	if result.Code != http.StatusOK || !bytes.Contains(result.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) {
+	if result.Code != http.StatusOK || !bytes.Contains(result.Body.Bytes(), []byte(`"status":"UNKNOWN"`)) || !bytes.Contains(result.Body.Bytes(), []byte(`"payment_channel_status":"UNKNOWN"`)) {
 		t.Fatalf("unconfirmed payment must remain unknown: %d %s", result.Code, result.Body.String())
 	}
 	blocked := request(handler, http.MethodPost, "/api/orders/A-1002/refunds", "token-a", map[string]string{"idempotency_key": "still-unknown", "reason": "customer_cancelled"})
@@ -344,7 +352,7 @@ func TestExistingDemoPaymentMigratesOnceWithoutUndoingSync(t *testing.T) {
 	if err := SeedDemoOrders(db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE orders SET status = 'PAID' WHERE id = 'A-1002'`); err != nil {
+	if _, err := db.Exec(`UPDATE orders SET status = 'PAID', payment_channel_status = 'SUCCEEDED' WHERE id = 'A-1002'`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE name = 'a1002_unknown_payment'`); err != nil {
@@ -364,7 +372,11 @@ func TestExistingDemoPaymentMigratesOnceWithoutUndoingSync(t *testing.T) {
 	if status != "UNKNOWN" {
 		t.Fatalf("legacy demo payment must become unknown once, got %s", status)
 	}
-	if _, err := db.Exec(`UPDATE orders SET status = 'PAID' WHERE id = 'A-1002'`); err != nil {
+	var migratedChannelStatus string
+	if err := db.QueryRow(`SELECT payment_channel_status FROM orders WHERE id = 'A-1002'`).Scan(&migratedChannelStatus); err != nil || migratedChannelStatus != "UNKNOWN" {
+		t.Fatalf("legacy demo channel status must become unknown once, got %q: %v", migratedChannelStatus, err)
+	}
+	if _, err := db.Exec(`UPDATE orders SET status = 'PAID', payment_channel_status = 'SUCCEEDED' WHERE id = 'A-1002'`); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -384,6 +396,10 @@ func TestExistingDemoPaymentMigratesOnceWithoutUndoingSync(t *testing.T) {
 	if status != "PAID" {
 		t.Fatalf("restart must retain synced payment, got %s", status)
 	}
+	var channelStatus string
+	if err := db.QueryRow(`SELECT payment_channel_status FROM orders WHERE id = 'A-1002'`).Scan(&channelStatus); err != nil || channelStatus != "SUCCEEDED" {
+		t.Fatalf("restart must retain synced channel status, got %q: %v", channelStatus, err)
+	}
 	if err := ResetDemoData(db); err != nil {
 		t.Fatal(err)
 	}
@@ -395,6 +411,9 @@ func TestExistingDemoPaymentMigratesOnceWithoutUndoingSync(t *testing.T) {
 	}
 	if status != "UNKNOWN" {
 		t.Fatalf("explicit reset must restore unknown payment, got %s", status)
+	}
+	if err := db.QueryRow(`SELECT payment_channel_status FROM orders WHERE id = 'A-1002'`).Scan(&channelStatus); err != nil || channelStatus != "UNKNOWN" {
+		t.Fatalf("explicit reset must restore unknown channel status, got %q: %v", channelStatus, err)
 	}
 }
 
@@ -673,7 +692,11 @@ INSERT INTO refunds VALUES ('legacy-refund', 'legacy-order', 'merchant-a', 100, 
 	if err := upgraded.QueryRow(`SELECT reason FROM refunds WHERE id = 'legacy-refund'`).Scan(&reason); err != nil || reason != "" {
 		t.Fatalf("migration must preserve legacy refund and add empty reason, reason=%q err=%v", reason, err)
 	}
-	if _, err := upgraded.Exec(`INSERT INTO orders VALUES ('legacy-order-b', 'merchant-b', 100, 'USD', 'PAID', 'mock-success')`); err != nil {
+	var channelStatus string
+	if err := upgraded.QueryRow(`SELECT payment_channel_status FROM orders WHERE id = 'legacy-order'`).Scan(&channelStatus); err != nil || channelStatus != "SUCCEEDED" {
+		t.Fatalf("migration must backfill paid channel status, got %q: %v", channelStatus, err)
+	}
+	if _, err := upgraded.Exec(`INSERT INTO orders (id, merchant_id, amount_cents, currency, status, provider_channel) VALUES ('legacy-order-b', 'merchant-b', 100, 'USD', 'PAID', 'mock-success')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := upgraded.Exec(`INSERT INTO refunds (id, order_id, merchant_id, amount_cents, currency, status, idempotency_key, provider_channel, provider_request_id, reason, created_at, updated_at) VALUES ('legacy-refund-b', 'legacy-order-b', 'merchant-b', 100, 'USD', 'PROCESSING', 'legacy-key', 'mock-success', 'legacy-provider-b', 'reason', '2026-10-27T00:00:00Z', '2026-10-27T00:00:00Z')`); err != nil {

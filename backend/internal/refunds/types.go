@@ -24,18 +24,19 @@ type Principal struct {
 }
 
 type Order struct {
-	ID                string `json:"id"`
-	MerchantID        string `json:"merchant_id"`
-	AmountCents       int64  `json:"amount_cents"`
-	Currency          string `json:"currency"`
-	Status            string `json:"status"`
-	ProviderChannel   string `json:"provider_channel"`
-	RefundID          string `json:"refund_id,omitempty"`
-	RefundStatus      Status `json:"refund_status,omitempty"`
-	RefundReason      string `json:"refund_reason,omitempty"`
-	RefundMessage     string `json:"refund_message,omitempty"`
-	RefundUpdatedAt   string `json:"refund_updated_at,omitempty"`
-	ProviderRequestID string `json:"provider_request_id,omitempty"`
+	ID                   string `json:"id"`
+	MerchantID           string `json:"merchant_id"`
+	AmountCents          int64  `json:"amount_cents"`
+	Currency             string `json:"currency"`
+	Status               string `json:"status"`
+	ProviderChannel      string `json:"provider_channel"`
+	PaymentChannelStatus string `json:"payment_channel_status"`
+	RefundID             string `json:"refund_id,omitempty"`
+	RefundStatus         Status `json:"refund_status,omitempty"`
+	RefundReason         string `json:"refund_reason,omitempty"`
+	RefundMessage        string `json:"refund_message,omitempty"`
+	RefundUpdatedAt      string `json:"refund_updated_at,omitempty"`
+	ProviderRequestID    string `json:"provider_request_id,omitempty"`
 }
 
 type Refund struct {

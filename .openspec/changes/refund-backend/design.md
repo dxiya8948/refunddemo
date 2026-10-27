@@ -30,6 +30,7 @@ Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主
 | `currency` | `TEXT NOT NULL` | 币种 |
 | `status` | `TEXT NOT NULL` | `UNKNOWN` / `PAID` / `UNPAID`；A-1002 初始未知，演示同步后为已支付 |
 | `provider_channel` | `TEXT NOT NULL` | 原支付渠道 |
+| `payment_channel_status` | `TEXT NOT NULL DEFAULT 'UNKNOWN'` | 独立的支付渠道查询结果：`UNKNOWN`、`SUCCEEDED` 或 `UNPAID` |
 
 索引 `idx_orders_merchant(merchant_id, id)` 支持商户范围查询。当前没有独立的用户或支付状态表。
 
@@ -66,7 +67,7 @@ Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主
 
 业务代码只通过 `Provider` 接口访问该表，不将模拟器账本直接当作业务退款表读取。
 
-`schema_migrations(name TEXT PRIMARY KEY)` 记录一次性演示数据迁移。旧库中匹配原始 A-1002 且尚无退款的 `PAID` 行只在首次升级时改为 `UNKNOWN`；已经发生退款的历史记录不回滚。之后服务重启或重复初始化不会反转已同步成功的支付状态。
+`schema_migrations(name TEXT PRIMARY KEY)` 记录一次性演示数据迁移。旧库升级时先新增 `payment_channel_status`，根据现有订单状态回填，再将匹配原始 A-1002 且尚无退款的旧 `PAID` 行一次性改为 `status=UNKNOWN`、`payment_channel_status=UNKNOWN`；已经发生退款的历史记录不回滚。之后服务重启或重复初始化不会反转已同步成功的状态。
 
 `OpenDB` 开启外键、WAL 和五秒 busy timeout。每个服务进程只保留一条 SQLite 连接。并发时数据库约束而非预先查询负责最终裁决。升级旧数据库时，迁移保留原有退款，并补充原因字段、商户范围内的幂等键约束及一次性 A-1002 未知支付基线迁移。`SeedDemoOrders` 以 `UNKNOWN` 新建 A-1002；重复运行采用 `INSERT OR IGNORE` 保留已同步的 `PAID`，不重置业务状态。仅匹配原种子 ID、商户、金额和渠道的旧 USD 记录及关联退款更正币种为 CNY，不改变金额或退款身份；正常启动不删除退款历史。`reset-demo` 是单独的破坏性命令。
 
@@ -83,7 +84,7 @@ Go 服务实现了[退款后端规范](../../specs/refund-backend/spec.md)。主
 
 ## 状态流转与查证
 
-支付状态与退款状态是两个不同的生命周期。A-1002 的 `UNKNOWN` 指支付状态未知。商户写身份调用 `POST /api/orders/A-1002/sync-payment` 后，服务通过 `PaymentProvider.QueryPayment` 查询模拟支付渠道；仅渠道返回 `PAID` 才条件更新订单，若仍为 `UNKNOWN` 则保持不可退款。该端点限定原渠道为 `mock-unknown`，按商户隔离，只读用户拒绝，重复同步安全。退款仍必须在 `PAID` 后创建，且退款状态可独立经历 `PROCESSING → UNKNOWN → SUCCEEDED`。
+订单支付状态、支付渠道状态与退款状态是不同生命周期。A-1002 的 `status`、`payment_channel_status` 初始均为 `UNKNOWN`。商户写身份调用 `POST /api/orders/A-1002/sync-payment` 后，服务通过 `PaymentProvider.QueryPayment` 查询模拟支付渠道；仅返回 `PAID` 才在同一 SQL 更新中写入 `status=PAID` 与 `payment_channel_status=SUCCEEDED`，若仍为 `UNKNOWN` 则两者保持未知、不可退款。`provider_channel=mock-unknown` 是渠道标识，不随状态变化。该端点按商户隔离，只读用户拒绝，重复同步安全。退款仍必须在 `PAID` 后创建，且退款状态可独立经历 `PROCESSING → UNKNOWN → SUCCEEDED`。
 
 ```text
 PROCESSING -> SUCCEEDED | FAILED | UNKNOWN

@@ -120,7 +120,7 @@ func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) listOrders(w http.ResponseWriter, r *http.Request, principal Principal) {
-	rows, err := h.db.QueryContext(r.Context(), `SELECT o.id, o.merchant_id, o.amount_cents, o.currency, o.status, o.provider_channel, COALESCE(f.id, ''), COALESCE(f.status, ''), COALESCE(f.reason, ''), COALESCE(f.updated_at, ''), CASE
+	rows, err := h.db.QueryContext(r.Context(), `SELECT o.id, o.merchant_id, o.amount_cents, o.currency, o.status, o.provider_channel, o.payment_channel_status, COALESCE(f.id, ''), COALESCE(f.status, ''), COALESCE(f.reason, ''), COALESCE(f.updated_at, ''), CASE
 		WHEN f.status = 'PROCESSING' THEN 'Refund is processing.'
 		WHEN f.status = 'UNKNOWN' THEN 'Channel processing result is pending confirmation. Query the original refund.'
 		WHEN f.status = 'SUCCEEDED' THEN 'Refund completed successfully.'
@@ -135,7 +135,7 @@ func (h *Handler) listOrders(w http.ResponseWriter, r *http.Request, principal P
 	orders := make([]Order, 0)
 	for rows.Next() {
 		var order Order
-		if err := rows.Scan(&order.ID, &order.MerchantID, &order.AmountCents, &order.Currency, &order.Status, &order.ProviderChannel, &order.RefundID, &order.RefundStatus, &order.RefundReason, &order.RefundUpdatedAt, &order.RefundMessage); err != nil {
+		if err := rows.Scan(&order.ID, &order.MerchantID, &order.AmountCents, &order.Currency, &order.Status, &order.ProviderChannel, &order.PaymentChannelStatus, &order.RefundID, &order.RefundStatus, &order.RefundReason, &order.RefundUpdatedAt, &order.RefundMessage); err != nil {
 			writeError(w, http.StatusInternalServerError, "internal_error", "could not load orders")
 			return
 		}
@@ -183,7 +183,7 @@ func (h *Handler) syncPayment(w http.ResponseWriter, r *http.Request, principal 
 		}
 		if status == "PAID" {
 			// The conditional update keeps concurrent synchronization idempotent.
-			if _, err := h.db.ExecContext(r.Context(), `UPDATE orders SET status = 'PAID' WHERE id = ? AND merchant_id = ? AND status = 'UNKNOWN' AND provider_channel = 'mock-unknown'`, orderID, principal.MerchantID); err != nil {
+			if _, err := h.db.ExecContext(r.Context(), `UPDATE orders SET status = 'PAID', payment_channel_status = 'SUCCEEDED' WHERE id = ? AND merchant_id = ? AND status = 'UNKNOWN' AND payment_channel_status = 'UNKNOWN' AND provider_channel = 'mock-unknown'`, orderID, principal.MerchantID); err != nil {
 				writeError(w, http.StatusInternalServerError, "internal_error", "could not synchronize payment")
 				return
 			}
@@ -422,7 +422,7 @@ func (h *Handler) reconcileRefund(w http.ResponseWriter, r *http.Request, princi
 
 func (h *Handler) loadOrder(ctx context.Context, id, merchantID string) (Order, error) {
 	var o Order
-	err := h.db.QueryRowContext(ctx, `SELECT id, merchant_id, amount_cents, currency, status, provider_channel FROM orders WHERE id = ? AND merchant_id = ?`, id, merchantID).Scan(&o.ID, &o.MerchantID, &o.AmountCents, &o.Currency, &o.Status, &o.ProviderChannel)
+	err := h.db.QueryRowContext(ctx, `SELECT id, merchant_id, amount_cents, currency, status, provider_channel, payment_channel_status FROM orders WHERE id = ? AND merchant_id = ?`, id, merchantID).Scan(&o.ID, &o.MerchantID, &o.AmountCents, &o.Currency, &o.Status, &o.ProviderChannel, &o.PaymentChannelStatus)
 	return o, err
 }
 

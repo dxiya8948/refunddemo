@@ -40,7 +40,7 @@
 
 ### Requirement: 未知支付状态同步
 
-演示订单 `A-1002` 初始支付状态为 `UNKNOWN`，不得创建退款。当前商户的写身份可通过 `POST /api/orders/{orderID}/sync-payment` 同步状态；仅 `mock-unknown` 渠道上的 `UNKNOWN` 状态可被确认成 `PAID`。该操作必须按商户隔离、只读身份返回 `403`，并且重复调用幂等。正常服务重启及重复初始化不得把已同步的状态改回 `UNKNOWN`；显式重置演示数据后恢复初始未知状态。
+演示订单 `A-1002` 初始订单支付状态 `status` 与支付渠道状态 `payment_channel_status` 均为 `UNKNOWN`，不得创建退款。当前商户的写身份可通过 `POST /api/orders/{orderID}/sync-payment` 查询模拟渠道；仅渠道确认 `PAID` 时，订单支付状态和渠道状态原子更新为 `PAID` 与 `SUCCEEDED`。渠道标识 `provider_channel` 保持不变。该操作必须按商户隔离、只读身份返回 `403`，且重复调用幂等。正常服务重启及重复初始化不得回滚同步结果；显式重置演示数据后恢复初始未知状态。
 
 #### Scenario: 未知支付先同步再退款
 

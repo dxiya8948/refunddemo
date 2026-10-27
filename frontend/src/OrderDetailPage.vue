@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Order } from './order'
-import { formatMoney, orderStatusLabel, paymentStatus, refundMessage, refundStatusLabel } from './order'
+import { formatMoney, orderStatusLabel, paymentChannelStatusLabel, paymentStatus, refundMessage, refundStatusLabel } from './order'
 
 defineProps<{ orderId: string; order: Order | null; loading: boolean; error: string; actionError: string; canReconcile: boolean; reconciling: boolean }>()
 defineEmits<{ back: []; reconcile: [order: Order] }>()
@@ -27,6 +27,7 @@ defineEmits<{ back: []; reconcile: [order: Order] }>()
         <div><dt>支付状态</dt><dd><span class="status-pill" :class="`payment-${paymentStatus(order).toLowerCase()}`">{{ orderStatusLabel(paymentStatus(order)) }}</span></dd></div>
         <div><dt>订单金额</dt><dd class="amount">{{ formatMoney(order.amount_cents, order.currency) }}</dd></div>
         <div><dt>支付渠道</dt><dd>{{ order.provider_channel }}</dd></div>
+        <div v-if="order.payment_channel_status"><dt>支付渠道状态</dt><dd><span :data-testid="`detail-payment-channel-status-${order.id}`" class="status-pill" :class="`channel-${order.payment_channel_status.toLowerCase()}`">{{ paymentChannelStatusLabel(order.payment_channel_status) }}</span></dd></div>
       </dl>
       <div class="detail-refund">
         <h2>退款</h2>

@@ -7,6 +7,7 @@ export type Order = {
   currency: string
   status: string
   provider_channel: string
+  payment_channel_status?: 'UNKNOWN' | 'SUCCEEDED' | 'UNPAID'
   refund_id?: string
   refund_status?: RefundStatus
   refund_reason?: string
@@ -21,6 +22,12 @@ export function orderStatusLabel(status: string) {
 
 export function paymentStatus(order: Order) {
   return order.status === 'PAID' || order.status === 'UNPAID' ? order.status : 'UNKNOWN'
+}
+
+export function paymentChannelStatusLabel(status?: Order['payment_channel_status']) {
+  if (status === 'SUCCEEDED') return '成功'
+  if (status === 'UNPAID') return '未支付'
+  return '待确认'
 }
 
 export function refundStatusLabel(status: RefundStatus | string) {

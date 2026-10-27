@@ -2,7 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import OrderDetailPage from './OrderDetailPage.vue'
 import type { Order, RefundStatus } from './order'
-import { formatMoney, orderStatusLabel, paymentStatus, refundMessage, refundStatusLabel } from './order'
+import { formatMoney, orderStatusLabel, paymentChannelStatusLabel, paymentStatus, refundMessage, refundStatusLabel } from './order'
 import { orderPath, useAppRoute } from './router'
 
 type Refund = {
@@ -152,8 +152,14 @@ async function syncPayment(order: Order) {
     const updated = await api<Order>(`/orders/${encodeURIComponent(order.id)}/sync-payment`, { method: 'POST' })
     if (session !== sessionVersion || requestedIdentity !== identityKey.value || updated.merchant_id !== identity.value.merchant) return
     const listed = orders.value.find((item) => item.id === updated.id)
-    if (listed) listed.status = updated.status
-    if (detailOrder.value?.id === updated.id) detailOrder.value.status = updated.status
+    if (listed) {
+      listed.status = updated.status
+      listed.payment_channel_status = updated.payment_channel_status
+    }
+    if (detailOrder.value?.id === updated.id) {
+      detailOrder.value.status = updated.status
+      detailOrder.value.payment_channel_status = updated.payment_channel_status
+    }
     showNotice(updated.status === 'PAID' ? `订单 ${order.id} 已确认支付成功。` : `订单 ${order.id} 的支付状态仍待确认。`)
   } catch (error) {
     if (session === sessionVersion && requestedIdentity === identityKey.value) errorMessage.value = error instanceof Error ? error.message : '支付状态同步失败。'
@@ -468,7 +474,9 @@ onUnmounted(clearNotice)
                 <td><span :data-testid="`order-status-${order.id}`" class="status-pill" :class="`order-${order.status.toLowerCase()}`">{{ orderStatusLabel(order.status) }}</span></td>
                 <td><span :data-testid="`payment-status-${order.id}`" class="status-pill" :class="`payment-${paymentStatus(order).toLowerCase()}`">{{ orderStatusLabel(paymentStatus(order)) }}</span></td>
                 <td class="amount">{{ formatMoney(order.amount_cents, order.currency) }}</td>
-                <td><span class="channel-dot"></span>{{ order.provider_channel }}</td>
+                <td><span class="channel-dot"></span>{{ order.provider_channel }}
+                  <small v-if="order.payment_channel_status" :data-testid="`payment-channel-status-${order.id}`" class="status-pill channel-status" :class="`channel-${order.payment_channel_status.toLowerCase()}`">渠道状态：{{ paymentChannelStatusLabel(order.payment_channel_status) }}</small>
+                </td>
                 <td>
                   <span v-if="order.refund_status" :data-testid="`refund-status-${order.id}`" class="status-pill" :class="`refund-${order.refund_status.toLowerCase()}`">
                     {{ refundStatusLabel(order.refund_status) }}

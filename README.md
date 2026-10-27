@@ -65,7 +65,7 @@ npm run build
 注意：A-1002 初始支付状态改为 `UNKNOWN` 是本项目的新增演示要求，偏离公开验收清单中该订单初始已支付的种子数据。验证公开验收时需单独说明这一差异。
 
 - 点击订单号进入 `/orders/{orderID}` 详情页；可复制 URL、刷新或使用浏览器回退。详情页直接请求按商户隔离的订单接口；以商户 B 打开商户 A 的详情 URL 应返回 `404` 并显示无权访问，不显示 A 的订单数据。静态部署时需将前端路由回退到 `index.html`。
-- `A-1002` 初始支付状态为 `UNKNOWN`，不可退款；在列表操作栏点“同步状态”后查询模拟渠道，确认支付成功才变为 `PAID` 并允许退款；若查询仍未知，则保持不可退款。该订单退款首次返回 `UNKNOWN`；退款弹窗、列表或订单详情中的“查询处理结果”按原渠道请求号查证为 `SUCCEEDED`，退款 `UNKNOWN` 行的“刷新”则只读取本地已保存状态。`A-1001` 退款立即成功；`A-1003` 被渠道明确拒绝；`A-1004` 未支付且不支持同步，不会调用退款渠道。普通“查询状态”只用于读取退款记录，不触发渠道查证。
+- `A-1002` 初始订单支付状态及支付渠道状态均为 `UNKNOWN`，不可退款；列表和详情分别显示渠道名称 `mock-unknown` 与“渠道状态：待确认”。点列表“同步状态”查询模拟渠道后，两者分别变为 `PAID` 与 `SUCCEEDED`，此时才允许退款；若查询仍未知，则两者保持未知。该订单退款首次返回 `UNKNOWN`；退款弹窗、列表或订单详情中的“查询处理结果”按原渠道请求号查证为 `SUCCEEDED`，退款 `UNKNOWN` 行的“刷新”则只读取本地已保存状态。`A-1001` 退款立即成功；`A-1003` 被渠道明确拒绝；`A-1004` 未支付且不支持同步，不会调用退款渠道。
 - 退款结果由初始化订单的原渠道决定，不由退款申请选择：`A-1001` 成功、`A-1002` 响应丢失后可查证、`A-1003` 明确失败。失败结果显示原因和不可重复发起的提示。
 - 商户 B 只能看到 `B-2001`。
 - 每笔订单最多创建一条退款。幂等键按商户隔离；同一键更换订单或原因返回 `409`。
@@ -92,6 +92,6 @@ npm run build
 | 加载、空列表、错误、处理中、身份切换 | `App.test.ts` 覆盖各状态及旧商户迟到响应 |
 | 可重复初始化且保留退款 | `TestContractSeedDataIsRepeatableAndPreservesRefunds` |
 
-手动演示 A-1002：初始化后确认 `GET /api/orders/A-1002` 为 `UNKNOWN`；退款请求应返回 `409 order_not_refundable`。用商户 A 写令牌调用 `POST /api/orders/A-1002/sync-payment` 后，订单变为 `PAID`；随后创建退款，首次结果为 `UNKNOWN`。停服并以相同数据库重启，调用 `/api/refunds/{id}/reconcile`；确认结果为 `SUCCEEDED` 且渠道请求号不变。支付同步不重复运行初始化回滚；普通启动和重复 `seed-demo` 保留已同步状态与退款历史。自动化测试使用临时数据库，不触碰默认数据库。
+手动演示 A-1002：初始化后确认 `GET /api/orders/A-1002` 的 `status` 与 `payment_channel_status` 均为 `UNKNOWN`；退款请求应返回 `409 order_not_refundable`。用商户 A 写令牌调用 `POST /api/orders/A-1002/sync-payment` 后，两字段分别变为 `PAID`、`SUCCEEDED`；随后创建退款，首次结果为 `UNKNOWN`。停服并以相同数据库重启，调用 `/api/refunds/{id}/reconcile`；确认退款结果为 `SUCCEEDED` 且渠道请求号不变。正常启动和重复 `seed-demo` 保留已同步状态与退款历史。自动化测试使用临时数据库，不触碰默认数据库。
 
 架构与前端设计系统见 [DESIGN.md](DESIGN.md)，后端 SDD 规范见 [.openspec/specs/refund-backend/spec.md](.openspec/specs/refund-backend/spec.md)，技术设计见 [.openspec/changes/refund-backend/design.md](.openspec/changes/refund-backend/design.md)，开发辅助说明见 [AI_USAGE.md](AI_USAGE.md)。

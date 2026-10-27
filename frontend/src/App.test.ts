@@ -26,28 +26,31 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); document.cookie = 'r
 
 describe('refund desk', () => {
   it('syncs A-1002 unknown payment before allowing its refund', async () => {
-    const pendingOrder = { ...order, id: 'A-1002', status: 'UNKNOWN', provider_channel: 'mock-unknown' }
+    const pendingOrder = { ...order, id: 'A-1002', status: 'UNKNOWN', provider_channel: 'mock-unknown', payment_channel_status: 'UNKNOWN' }
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       if (String(input) === '/api/orders') return jsonResponse([pendingOrder])
       if (String(input) === '/api/orders/A-1002/sync-payment' && init?.method === 'POST') {
-        return jsonResponse({ ...pendingOrder, status: 'PAID' })
+        return jsonResponse({ ...pendingOrder, status: 'PAID', payment_channel_status: 'SUCCEEDED' })
       }
       throw new Error(`Unexpected request: ${String(input)}`)
     })
     const wrapper = mount(App)
     await flushPromises()
     expect(wrapper.get('[data-testid="payment-status-A-1002"]').text()).toBe('未知')
+    expect(wrapper.get('[data-testid="payment-channel-status-A-1002"]').text()).toContain('待确认')
     expect(wrapper.find('[data-testid="refund-A-1002"]').exists()).toBe(false)
     await wrapper.get('[data-testid="sync-payment-A-1002"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="payment-status-A-1002"]').text()).toBe('已支付')
+    expect(wrapper.get('[data-testid="payment-channel-status-A-1002"]').text()).toContain('成功')
+    expect(wrapper.get('[data-testid="payment-channel-status-A-1002"]').classes()).toContain('channel-succeeded')
     expect(wrapper.find('[data-testid="sync-payment-A-1002"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="refund-A-1002"]').attributes('disabled')).toBeUndefined()
     expect(fetchMock.mock.calls.some(([url, init]) => String(url) === '/api/orders/A-1002/sync-payment' && init?.method === 'POST')).toBe(true)
   })
 
   it('keeps A-1002 unrefundable when payment sync is still unknown', async () => {
-    const pendingOrder = { ...order, id: 'A-1002', status: 'UNKNOWN', provider_channel: 'mock-unknown' }
+    const pendingOrder = { ...order, id: 'A-1002', status: 'UNKNOWN', provider_channel: 'mock-unknown', payment_channel_status: 'UNKNOWN' }
     vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
       if (String(input) === '/api/orders') return jsonResponse([pendingOrder])
       if (String(input) === '/api/orders/A-1002/sync-payment' && init?.method === 'POST') return jsonResponse(pendingOrder)
@@ -58,9 +61,22 @@ describe('refund desk', () => {
     await wrapper.get('[data-testid="sync-payment-A-1002"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="payment-status-A-1002"]').text()).toBe('未知')
+    expect(wrapper.get('[data-testid="payment-channel-status-A-1002"]').text()).toContain('待确认')
     expect(wrapper.get('[data-testid="sync-payment-A-1002"]').text()).toBe('同步状态')
     expect(wrapper.find('[data-testid="refund-A-1002"]').exists()).toBe(false)
     expect(wrapper.get('[role="status"]').text()).toContain('支付状态仍待确认')
+  })
+
+  it('shows the saved payment channel status on the order detail page', async () => {
+    window.history.replaceState({}, '', '/orders/A-1002')
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input) => {
+      if (String(input) === '/api/orders/A-1002') return jsonResponse({ ...order, id: 'A-1002', provider_channel: 'mock-unknown', payment_channel_status: 'SUCCEEDED' })
+      throw new Error(`Unexpected request: ${String(input)}`)
+    })
+    const wrapper = mount(App)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="detail-payment-channel-status-A-1002"]').text()).toBe('成功')
+    expect(wrapper.get('[data-testid="order-detail-page"]').text()).toContain('mock-unknown')
   })
 
   it('marks the current user only while choosing a replacement identity', async () => {

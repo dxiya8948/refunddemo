@@ -8,7 +8,7 @@
 
 | 表 | 关键字段与约束 |
 | --- | --- |
-| `orders` | `id` 主键；`merchant_id`、`amount_cents`、`currency`、`status`、`provider_channel`；金额大于零；商户索引 |
+| `orders` | `id` 主键；`merchant_id`、`amount_cents`、`currency`、`status`、`provider_channel`、`payment_channel_status`；金额大于零；商户索引 |
 | `refunds` | `id` 主键；`order_id` 唯一且引用订单；`(merchant_id, idempotency_key)` 唯一；全额、状态、原因、原渠道、`provider_request_id`、时间戳 |
 | `provider_records` | `(provider_channel, provider_request_id)` 联合主键；订单、金额、结果、提交次数；仅模拟器通过 `Provider` 接口读写 |
 
@@ -22,7 +22,7 @@
 
 ## 前端设计系统
 
-工作台使用简体中文、紧凑列表和蓝色主操作（`#2563eb`，悬停 `#1d4ed8`）；页面背景 `#f5f7fa`、表面白色、正文 `#202a35`，金额使用等宽字体。控件与容器圆角 4–7 px，内容最大宽 1240 px。状态同时显示文字和颜色：订单已支付蓝色/未知琥珀色/未支付灰色；支付已支付绿色/未知琥珀色/未支付灰色；退款处理中蓝色、未知琥珀色、成功绿色、失败红色。支付状态由订单状态字段返回；A-1002 的未知状态可在列表中通过“同步状态”确认。
+工作台使用简体中文、紧凑列表和蓝色主操作（`#2563eb`，悬停 `#1d4ed8`）；页面背景 `#f5f7fa`、表面白色、正文 `#202a35`，金额使用等宽字体。控件与容器圆角 4–7 px，内容最大宽 1240 px。状态同时显示文字和颜色：订单已支付蓝色/未知琥珀色/未支付灰色；支付及渠道成功绿色/未知琥珀色/未支付灰色；退款处理中蓝色、未知琥珀色、成功绿色、失败红色。订单支付状态由 `orders.status` 返回，支付渠道状态由 `orders.payment_channel_status` 返回，渠道名称 `provider_channel` 始终作为标识单独展示。
 
 无有效 `refunddesk_identity` cookie 时先选演示身份；cookie 仅保存身份键，不是认证凭据。切换用户清除旧商户内存数据并重新请求；选择页标记上次身份。列表的订单号和“详情”入口均进入 `/orders/{id}`，页面只取当前身份的详情 API，不能靠 URL 或列表缓存绕过后端鉴权。
 
